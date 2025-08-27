@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Recon Flow Script
-# Dependencies: httpx-toolkit, grep, awk, tee
+# Dependencies: httpx-toolkit, grep, awk, tee, wafw00f
 
 # 1. Ask user for input
 read -p "Enter target domain or acquisition file: " target
@@ -46,3 +46,14 @@ for tech in "${techs[@]}"; do
 done
 
 echo "[*] Segregation complete. Check the 'Segregated_Domains' folder."
+
+# 4. Run WAF Detection on all alive URLs (save in current directory only)
+echo "[*] Running WAF detection with wafw00f ..."
+awk '{print $1}' httpx_result.txt | sort -u | while read -r url; do
+    if [[ -n "$url" ]]; then
+        wafw00f "$url" -a | tee -a waf_detection.txt
+        echo "----" >> waf_detection.txt
+    fi
+done
+
+echo "[*] WAF detection complete. Results saved in waf_detection.txt"
