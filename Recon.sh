@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Recon Flow Script
-# Dependencies: httpx-toolkit, grep, awk, tee, wafw00f
+# Dependencies: httpx-toolkit, grep, awk, tee, wafw00f, naabu, nmap
 
 # 1. Ask user for input
 read -p "Enter target domain or acquisition file: " target
@@ -47,7 +47,7 @@ done
 
 echo "[*] Segregation complete. Check the 'Segregated_Domains' folder."
 
-# 4. Run WAF Detection on all alive URLs (save in current directory only)
+# 4. Run WAF Detection on all alive URLs
 echo "[*] Running WAF detection with wafw00f ..."
 awk '{print $1}' httpx_result.txt | sort -u | while read -r url; do
     if [[ -n "$url" ]]; then
@@ -57,3 +57,26 @@ awk '{print $1}' httpx_result.txt | sort -u | while read -r url; do
 done
 
 echo "[*] WAF detection complete. Results saved in waf_detection.txt"
+
+# 5. Cloud Asset Discovery
+echo "[*] Running Cloud Asset Discovery ..."
+
+mkdir -p Cloud_Assets
+
+# Extract alive hosts
+awk '{print $1}' httpx_result.txt | sort -u > alive_hosts.txt
+
+# Check CNAMEs and IP ASN (using dnsx + httpx)
+dnsx -l alive_hosts.txt -resp -a -cname -silent -o dnsx_cloud.txt
+
+# Parse common cloud providers
+grep -Ei "amazonaws|cloudfront|s3\.|azure|windows\.net|digitalocean|cloudflare|heroku|vercel|netlify|fastly" dnsx_cloud.txt \
+    | tee Cloud_Assets/cloud_assets.txt
+
+if [[ -s Cloud_Assets/cloud_assets.txt ]]; then
+    echo "  [+] Potential Cloud Assets found → Cloud_Assets/cloud_assets.txt"
+else
+    echo "  [-] No cloud assets detected"
+fi
+
+echo "[*] Cloud Asset Discovery complete."
