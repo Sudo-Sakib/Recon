@@ -1,181 +1,57 @@
 #!/bin/bash
 
-# ================= Colors =================
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[1;34m"
-NC="\033[0m"
+# ==========================================
+# Subdomain Enumeration + Crawling Flow Script
+# Author: Saint Paul's Assistant
+# Dependencies: subfinder, dnsx, wafw00f, httpx-toolkit, grep, tee, awk, sort, uniq
+# ==========================================
 
-# ================= Help Menu =================
-usage() {
-    echo -e "${GREEN}Usage:${NC}"
-    echo -e "  $0 -d <domain> -o <output.txt> [-w <wordlist.txt>] [-r <resolvers.txt>] [-t <tmp_dir>]"
-    echo -e "  $0 -l <domain_list.txt> -o <output.txt> [-w <wordlist.txt>] [-r <resolvers.txt>] [-t <tmp_dir>]"
-    echo -e "\n${YELLOW}Options:${NC}"
-    echo -e "  -d DOMAIN\t\tSingle domain to enumerate"
-    echo -e "  -l LIST\t\tList of domains to enumerate"
-    echo -e "  -o OUTPUT\t\tFinal output file (required)"
-    echo -e "  -w WORDLIST\t\tSubdomain brute-force wordlist"
-    echo -e "  -r RESOLVERS\t\tCustom resolvers file"
-    echo -e "  -t TMPDIR\t\tTemporary directory"
-    echo -e "  -h\t\t\tDisplay this help menu"
+# Ask user for input file
+read -p "Enter the input file containing Domains/Acquisitions: " INPUT_FILE
 
-    echo -e "\n${BLUE}Examples:${NC}"
-    echo -e "  $0 -d example.com -o result.txt"
-    echo -e "  $0 -d example.com -o result.txt -w words.txt"
-    echo -e "  $0 -l domains.txt -o final.txt -w words.txt -r myresolvers.txt"
-    exit 0
-}
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "[!] Input file not found!"
+    exit 1
+fi
 
-# ================= Parse Arguments =================
-while getopts ":d:l:o:w:r:t:h" opt; do
-    case $opt in
-        d) domain=$OPTARG ;;
-        l) list=$OPTARG ;;
-        o) output_file=$OPTARG ;;
-        w) wordlist=$OPTARG ;;
-        r) resolvers_file=$OPTARG ;;
-        t) tmpdir=$OPTARG ;;
-        h) usage ;;
-        *) usage ;;
-    esac
+OUTPUT_DIR="recon_output"
+mkdir -p "$OUTPUT_DIR"
+
+# Step 1: Subfinder Enumeration (Round 1)
+echo "[*] Running Subfinder (Round 1)..."
+subfinder -silent -all -recursive -dL "$INPUT_FILE" -o "$OUTPUT_DIR/subfinder_round1.txt"
+
+# Step 2: Subfinder Enumeration (Round 2 on Round 1 result)
+echo "[*] Running Subfinder (Round 2 on Round 1 results)..."
+subfinder -silent -all -recursive -dL "$OUTPUT_DIR/subfinder_round1.txt" -o "$OUTPUT_DIR/subfinder_round2.txt"
+
+# Step 3: Merge & Deduplicate subdomains
+cat "$OUTPUT_DIR/subfinder_round1.txt" "$OUTPUT_DIR/subfinder_round2.txt" | sort -u > "$OUTPUT_DIR/all_subdomains.txt"
+
+# Step 4: DNSX for Valid Subdomains
+echo "[*] Resolving subdomains with dnsx..."
+dnsx -silent -resp-only -r 1.1.1.1,8.8.8.8 -l "$OUTPUT_DIR/all_subdomains.txt" -o "$OUTPUT_DIR/resolved_subdomains.txt"
+
+# Step 5: DNSX to Get Unique IP Addresses
+echo "[*] Getting IPs for resolved subdomains..."
+dnsx -silent -a -r 1.1.1.1,8.8.8.8 -l "$OUTPUT_DIR/resolved_subdomains.txt" | awk '{print $2}' | sort -u > "$OUTPUT_DIR/resolved_ips.txt"
+
+# Step 6: Run Wafw00f on Each Subdomain
+echo "[*] Running Wafw00f..."
+while read -r sub; do
+    wafw00f "$sub" | tee -a "$OUTPUT_DIR/wafw00f_results.txt"
+done < "$OUTPUT_DIR/resolved_subdomains.txt"
+
+# Step 7: Run Httpx Toolkit with Tech Detection
+echo "[*] Running Httpx with technology detection..."
+httpx -silent -tech-detect -title -status-code -cdn -cname -ip -l "$OUTPUT_DIR/resolved_subdomains.txt" -o "$OUTPUT_DIR/httpx_results.txt"
+
+# Step 8: Grep tech stack results
+echo "[*] Extracting technology-specific subdomains..."
+declare -a techs=("Php" "WordPress" "Apache" "IIS" "Nginx" "Express" "Node.js" "Joomla" "Drupal")
+
+for tech in "${techs[@]}"; do
+    grep -i "$tech" "$OUTPUT_DIR/httpx_results.txt" | tee "$OUTPUT_DIR/${tech}_domains.txt"
 done
 
-if [[ -z $output_file || ( -z $domain && -z $list ) ]]; then
-    usage
-fi
-
-# ================= Tool GitHub Paths =================
-declare -A tool_paths=(
-    [subfinder]="github.com/projectdiscovery/subfinder/v2/cmd/subfinder"
-    [puredns]="github.com/d3mondev/puredns/v2"
-    [dnsx]="github.com/projectdiscovery/dnsx/cmd/dnsx"
-    [httpx]="github.com/projectdiscovery/httpx/cmd/httpx"
-    [dnsvalidator]="github.com/vortexau/dnsvalidator"
-    [cero]="github.com/projectdiscovery/cero/cmd/cero"
-)
-
-# ================= Install Tools =================
-install_tool() {
-    local tool="$1"
-    local path="${tool_paths[$tool]}"
-
-    if ! command -v "$tool" &>/dev/null; then
-        echo -e "${YELLOW}[!] Installing $tool from $path...${NC}"
-        if command -v go &>/dev/null; then
-            go install "$path@latest"
-            [[ -f ~/go/bin/$tool ]] && sudo mv ~/go/bin/$tool /usr/local/bin/
-        else
-            echo -e "${RED}[-] Go is not installed. Cannot install $tool.${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[+] $tool already installed.${NC}"
-    fi
-}
-
-# Install required tools
-required_tools=(subfinder puredns dnsx httpx dnsvalidator)
-for tool in "${required_tools[@]}"; do install_tool "$tool"; done
-
-# Optional: Cero
-if command -v cero &>/dev/null; then
-    use_cero=true
-else
-    echo -e "${YELLOW}[!] Optional tool 'cero' not found. Skipping verification stage.${NC}"
-    use_cero=false
-fi
-
-# ================= Setup Directories =================
-tmpdir="${tmpdir:-$(mktemp -d)}"
-mkdir -p "$tmpdir"
-done_file="$tmpdir/.done"
-touch "$done_file"
-
-echo -e "${GREEN}[+] Temporary directory: $tmpdir${NC}"
-
-# ================= DNS Resolver Handling =================
-if [[ -z $resolvers_file ]]; then
-    echo -e "${YELLOW}[!] No resolvers provided. Running dnsvalidator...${NC}"
-    dnsvalidator -tL https://public-dns.info/nameservers.txt -threads 100 -o "$tmpdir/resolvers.txt"
-    resolvers_file="$tmpdir/resolvers.txt"
-else
-    [[ ! -f $resolvers_file ]] && { echo -e "${RED}[-] Resolvers file not found: $resolvers_file${NC}"; exit 1; }
-fi
-
-# ================= Wildcard Check =================
-is_wildcard() {
-    local d="$1"
-    local random=$(head /dev/urandom | tr -dc a-z | head -c 12).$d
-    local res=$(dig +short "$random" @"$(head -n1 "$resolvers_file")")
-    [[ -n "$res" ]]
-}
-
-# ================= Domain Enumeration =================
-enumerate_domain() {
-    local d="$1"
-    local safe=$(echo "$d" | tr '/:' '_')
-
-    if grep -qx "$d" "$done_file"; then
-        echo -e "${YELLOW}[!] Skipping already done: $d${NC}"
-        return
-    fi
-
-    echo -e "${GREEN}[*] Enumerating $d...${NC}"
-    subfinder -silent -d "$d" | tee "$tmpdir/${safe}_subfinder.txt"
-
-    if [[ -n $wordlist ]]; then
-        if is_wildcard "$d"; then
-            echo -e "${RED}[!] Wildcard detected. Skipping brute-force for $d.${NC}"
-        else
-            echo -e "${YELLOW}[*] Brute-forcing with puredns...${NC}"
-            puredns bruteforce "$wordlist" "$d" -r "$resolvers_file" \
-                --resolvers-trusted "$resolvers_file" \
-                --wildcard-batch 100 --wildcard-tests 10 \
-                -w "$tmpdir/${safe}_puredns.txt"
-        fi
-    fi
-
-    echo "$d" >> "$done_file"
-}
-
-# ================= Enumerate Domains =================
-[[ -n $domain ]] && enumerate_domain "$domain"
-if [[ -n $list ]]; then
-    while IFS= read -r d; do
-        [[ -z "$d" || "$d" =~ ^# ]] && continue
-        enumerate_domain "$d"
-    done < "$list"
-fi
-
-# ================= Merge & Resolve =================
-echo -e "${YELLOW}[*] Merging results...${NC}"
-cat "$tmpdir"/*.txt | sort -u > "$tmpdir/all_subs.txt"
-
-resolved="${output_file%.*}_resolved.txt"
-dnsx -silent -r "$resolvers_file" -l "$tmpdir/all_subs.txt" -o "$resolved"
-echo -e "${GREEN}[+] Resolved domains saved: $resolved${NC}"
-
-# ================= Optional: Verify with Cero =================
-if $use_cero; then
-    verified="${output_file%.*}_verified.txt"
-    cero -l "$resolved" -o "$verified"
-    cp "$verified" "$output_file"
-    echo -e "${GREEN}[+] Verified subdomains saved: $output_file${NC}"
-else
-    cp "$resolved" "$output_file"
-fi
-
-# ================= HTTPx Probing =================
-httpx_out="${output_file%.*}_httpx.txt"
-httpx -silent -threads 100 -l "$output_file" -o "$httpx_out"
-echo -e "${GREEN}[+] Live HTTP(s) endpoints saved: $httpx_out${NC}"
-
-# ================= Final Summary =================
-echo -e "\n${BLUE}[✓] Complete Summary:${NC}"
-echo -e "  Raw Subdomains:     $tmpdir/all_subs.txt"
-echo -e "  Resolved Domains:   $resolved"
-$use_cero && echo -e "  Verified (cero):    $output_file"
-echo -e "  Live HTTP(s):       $httpx_out"
-echo -e "${GREEN}[✓] Done.${NC}"
+echo "[+] Recon flow completed. All results saved in '$OUTPUT_DIR/'"
