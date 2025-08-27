@@ -54,4 +54,37 @@ for tech in "${techs[@]}"; do
     grep -i "$tech" "$OUTPUT_DIR/httpx_results.txt" | tee "$OUTPUT_DIR/${tech}_domains.txt"
 done
 
+# 8. Cloud Asset Discovery
+echo "[*] Running Cloud Asset Discovery ..."
+awk '{print $1}' httpx_result.txt | sort -u > live_domains.txt
+
+# Example: simple grep for known cloud patterns
+grep -Ei "s3\.amazonaws\.com|blob\.core\.windows\.net|storage\.googleapis\.com|cloudfront\.net" live_domains.txt > cloud_assets.txt
+
+echo "[*] Cloud assets saved in cloud_assets.txt"
+
+# 9. Bucket Exposure Testing
+echo "[*] Checking for exposed buckets ..."
+
+mkdir -p Bucket_Exposure
+
+while read -r asset; do
+    if [[ "$asset" =~ s3\.amazonaws\.com ]]; then
+        bucket=$(echo "$asset" | awk -F'.s3' '{print $1}' | sed 's~https\?://~~')
+        echo "  [+] Testing S3 bucket: $bucket"
+        aws s3 ls "s3://$bucket" --no-sign-request > "Bucket_Exposure/${bucket}_s3.txt" 2>&1
+    elif [[ "$asset" =~ blob\.core\.windows\.net ]]; then
+        bucket=$(echo "$asset" | awk -F'.blob.core.windows.net' '{print $1}' | sed 's~https\?://~~')
+        echo "  [+] Testing Azure Blob: $bucket"
+        az storage blob list --account-name "$bucket" --container-name '$root' --auth-mode key > "Bucket_Exposure/${bucket}_azure.txt" 2>&1
+    elif [[ "$asset" =~ storage\.googleapis\.com ]]; then
+        bucket=$(echo "$asset" | awk -F'.storage.googleapis.com' '{print $1}' | sed 's~https\?://~~')
+        echo "  [+] Testing GCP Bucket: $bucket"
+        gsutil ls "gs://$bucket" > "Bucket_Exposure/${bucket}_gcp.txt" 2>&1
+    fi
+done < cloud_assets.txt
+
+echo "[*] Bucket exposure testing complete. Results saved in Bucket_Exposure/"
+
+
 echo "[+] Recon flow completed. All results saved in '$OUTPUT_DIR/'"
