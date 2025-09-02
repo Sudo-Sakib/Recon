@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# For SubDomain Segregation based on Tech-Stack, WAF Detection and SubDomain Resolving
 # Recon Flow Script
 # Dependencies: httpx-toolkit, grep, awk, tee, wafw00f, naabu, nmap
 
@@ -14,7 +15,13 @@ else
     input="temp_input.txt"
 fi
 
-# 2. Run httpx-toolkit with technology detection
+# 2. Resolve subdomains with dnsx
+echo "[*] Resolving subdomains with dnsx ..."
+cat "$input" | dnsx -silent -ro -o IPs.txt
+
+echo "[*] Resolved subdomains saved in IPs.txt"
+
+# 3. Run httpx-toolkit with technology detection
 echo "[*] Running httpx-toolkit on $target ..."
 httpx-toolkit -l "$input" -tech-detect -status-code -title -silent -o httpx_result.txt
 
@@ -58,24 +65,6 @@ done
 
 echo "[*] WAF detection complete. Results saved in waf_detection.txt"
 
-# 5. Cloud Asset Discovery
-echo "[*] Running Cloud Asset Discovery ..."
-
-mkdir -p Cloud_Assets
-
-# Extract alive hosts
-awk '{print $1}' httpx_result.txt | sort -u > alive_hosts.txt
-
-# Check CNAMEs and IP ASN (using dnsx + httpx)
-dnsx -l alive_hosts.txt -resp -a -cname -silent -o dnsx_cloud.txt
-
-# Parse common cloud providers
-grep -Ei "amazonaws|cloudfront|s3\.|azure|windows\.net|digitalocean|cloudflare|heroku|vercel|netlify|fastly" dnsx_cloud.txt \
-    | tee Cloud_Assets/cloud_assets.txt
-
-if [[ -s Cloud_Assets/cloud_assets.txt ]]; then
-    echo "  [+] Potential Cloud Assets found → Cloud_Assets/cloud_assets.txt"
-else
     echo "  [-] No cloud assets detected"
 fi
 
