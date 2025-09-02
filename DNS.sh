@@ -19,7 +19,7 @@ mkdir -p "$OUTPUT_DIR"
 # Step 0: Prepare resolvers
 if [[ ! -f resolvers.txt ]]; then
     echo "[*] Fetching fresh resolvers..."
-    curl -s https://github.com/trickest/resolvers/blob/main/resolvers-trusted.txt -o resolvers.txt
+    curl -s https://raw.githubusercontent.com/trickest/resolvers/refs/heads/main/resolvers-trusted.txt -o resolvers.txt
 fi
 
 # Step 1: Subfinder Enumeration (Round 1)
