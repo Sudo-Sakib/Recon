@@ -32,9 +32,10 @@ subfinder -silent -all -recursive -dL "$OUTPUT_DIR/subfinder_round1.txt" -o "$OU
 
 # Step 3: Certificate Transparency Enumeration (cero)
 echo "[*] Pulling subdomains from Certificate Transparency logs (cero)..."
-cero -dL "$INPUT_FILE" | sort -u > "$OUTPUT_DIR/cero.txt"
+cero -d < "$INPUT_FILE" | sort -u > "$OUTPUT_DIR/cero.txt"
 
 # Step 4: Chaos Dataset Enumeration
+# chaos -key <YOUR_KEY>
 echo "[*] Pulling subdomains from ProjectDiscovery Chaos dataset..."
 chaos -dL "$INPUT_FILE" -silent -o "$OUTPUT_DIR/chaos.txt"
 
